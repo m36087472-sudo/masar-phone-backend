@@ -1,0 +1,4 @@
+[dotenv@17.3.1] injecting env (13) from .env -- tip: 🔐 prevent building .env in docker: https://dotenvx.com/prebuild
+Server running on port 5000
+MongoDB connected
+Index creation warning: An existing index has the same name as the requested index. When index names are not specified, they are auto generated and can cause conflicts. Please refer to our documentation. Requested index: { v: 2, unique: true, key: { category: 1, subCategory: 1 }, name: "category_1_subCategory_1", sparse: true }, existing index: { v: 2, unique: true, key: { category: 1, subCategory: 1 }, name: "category_1_subCategory_1" }
