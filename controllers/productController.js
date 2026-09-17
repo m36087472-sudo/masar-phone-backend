@@ -1,9 +1,10 @@
 const Product = require("../models/Product");
 const jwt = require("jsonwebtoken");
 
-async function revalidateProducts() {
+async function revalidateProducts(productId) {
   try {
-    const url = `${process.env.FRONTEND_URL}/api/revalidate?secret=${process.env.REVALIDATE_SECRET}&tag=products`;
+    const base = `${process.env.FRONTEND_URL}/api/revalidate?secret=${process.env.REVALIDATE_SECRET}&tag=products`;
+    const url = productId ? `${base}&productId=${productId}` : base;
     await fetch(url, { method: "POST" });
   } catch { /* non-blocking */ }
 }
@@ -116,16 +117,23 @@ exports.updatePurchaseStatus = [requireAdmin, async (req, res) => {
       { new: true, select: "name status purchasable" }
     );
     if (!product) return res.status(404).json({ error: "المنتج غير موجود" });
-    revalidateProducts();
+    revalidateProducts(req.params.id);
     res.json({ ok: true, status: product.status, purchasable: product.purchasable });
   } catch {
     res.status(500).json({ error: "خطأ في الخادم" });
   }
 }];
 
+// Fields the product detail page actually uses — excludes admin-only / unused fields
+const DETAIL_PROJECTION =
+  "name brief originalPrice salePrice description image images variants " +
+  "color storage network screenSize specGroups sections " +
+  "freeDelivery deliveryTime warrantyYears installment taxIncluded " +
+  "category subCategory brand inStock status purchasable";
+
 exports.getProduct = async (req, res) => {
   try {
-    const product = await Product.findById(req.params.id).lean();
+    const product = await Product.findById(req.params.id, DETAIL_PROJECTION).lean();
     if (!product) return res.status(404).json({ message: "Product not found" });
     // Add virtual fields manually since lean() skips them
     product.price = product.salePrice || product.originalPrice;
@@ -143,7 +151,7 @@ exports.createProduct = [requireAdmin, async (req, res) => {
   try {
     const data = pickAllowed(req.body);
     const product = await Product.create(data);
-    revalidateProducts();
+    revalidateProducts(product._id.toString());
     res.status(201).json(product);
   } catch {
     res.status(500).json({ error: "خطأ في الخادم" });
@@ -155,7 +163,7 @@ exports.updateProduct = [requireAdmin, async (req, res) => {
     const data = pickAllowed(req.body);
     const product = await Product.findByIdAndUpdate(req.params.id, data, { new: true });
     if (!product) return res.status(404).json({ message: "Product not found" });
-    revalidateProducts();
+    revalidateProducts(req.params.id);
     res.json(product);
   } catch {
     res.status(500).json({ error: "خطأ في الخادم" });
@@ -166,7 +174,7 @@ exports.deleteProduct = [requireAdmin, async (req, res) => {
   try {
     const product = await Product.findByIdAndDelete(req.params.id);
     if (!product) return res.status(404).json({ message: "Product not found" });
-    revalidateProducts();
+    revalidateProducts(req.params.id);
     res.json({ message: "Product deleted" });
   } catch {
     res.status(500).json({ error: "خطأ في الخادم" });
