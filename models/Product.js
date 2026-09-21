@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const { SUPPORTED_CURRENCIES } = require("../config/countries");
 
 const SECTION_TYPES = [
   "design", "colors", "camera", "zoom", "low_light", "front_camera",
@@ -27,12 +28,51 @@ const sectionSub = new mongoose.Schema({
   isActive:    { type: Boolean, default: true },
 }, { _id: true });
 
+/**
+ * Per-country price entry.
+ * originalPrice: base (crossed-out) price in the country's currency.
+ * salePrice:     actual selling price (null = no discount, show originalPrice).
+ * Both stored as exact values entered by admin — no runtime conversion.
+ */
+const countryPriceSub = new mongoose.Schema(
+  {
+    currency:      { type: String, required: true, enum: SUPPORTED_CURRENCIES },
+    originalPrice: { type: Number, required: true, min: 0 },
+    salePrice:     { type: Number, default: null, min: 0 },
+  },
+  { _id: false }
+);
+
+/**
+ * Per-country prices for each storage option inside a variant.
+ */
+const storageCountryPriceSub = new mongoose.Schema(
+  {
+    currency:      { type: String, required: true, enum: SUPPORTED_CURRENCIES },
+    originalPrice: { type: Number, required: true, min: 0 },
+    salePrice:     { type: Number, default: null, min: 0 },
+  },
+  { _id: false }
+);
+
 const productSchema = new mongoose.Schema(
   {
     name: { type: String, required: true },
     brief: { type: String },
     originalPrice: { type: Number, required: true },
     salePrice: { type: Number },
+
+    /**
+     * countryPrices — keyed by currency code (SAR, AED, QAR, KWD, OMR).
+     * SAR prices mirror originalPrice/salePrice for consistency.
+     * Other currencies are populated by migration or admin input.
+     * A missing key means "not available in that country".
+     */
+    countryPrices: {
+      type: Map,
+      of: countryPriceSub,
+      default: {},
+    },
     description: { type: String },
     image: { type: String },
     images: [{ type: String }],
@@ -51,6 +91,12 @@ const productSchema = new mongoose.Schema(
             size: String,
             originalPrice: Number,
             salePrice: Number,
+            /** Per-country prices for this specific storage SKU */
+            countryPrices: {
+              type: Map,
+              of: storageCountryPriceSub,
+              default: {},
+            },
           },
         ],
       },

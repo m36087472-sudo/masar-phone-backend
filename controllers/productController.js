@@ -35,6 +35,7 @@ const ALLOWED_FIELDS = [
   "originalPrice", "salePrice", "warrantyYears",
   "freeDelivery", "taxIncluded", "inStock",
   "installment", "specs", "specGroups", "sections", "colors", "variants", "image", "images",
+  "countryPrices",
 ];
 
 function pickAllowed(body) {
@@ -45,7 +46,7 @@ function pickAllowed(body) {
 }
 
 // Fields for listing/homepage — no description, sections, specGroups, specs
-const LIST_PROJECTION = "name brief category subCategory brand color storage originalPrice salePrice warrantyYears freeDelivery taxIncluded inStock status purchasable installment variants image images";
+const LIST_PROJECTION = "name brief category subCategory brand color storage originalPrice salePrice countryPrices warrantyYears freeDelivery taxIncluded inStock status purchasable installment variants image images";
 
 // Trim each variant to only what ProductCard needs:
 // - images[0] only (not the full gallery)
@@ -96,7 +97,7 @@ exports.verifyCart = async (req, res) => {
     }
     const products = await Product.find(
       { _id: { $in: ids } },
-      "name originalPrice salePrice inStock status purchasable"
+      "name originalPrice salePrice countryPrices inStock status purchasable"
     ).lean();
     res.json(products);
   } catch {
@@ -126,7 +127,7 @@ exports.updatePurchaseStatus = [requireAdmin, async (req, res) => {
 
 // Fields the product detail page actually uses — excludes admin-only / unused fields
 const DETAIL_PROJECTION =
-  "name brief originalPrice salePrice description image images variants " +
+  "name brief originalPrice salePrice countryPrices description image images variants " +
   "color storage network screenSize specGroups sections " +
   "freeDelivery deliveryTime warrantyYears installment taxIncluded " +
   "category subCategory brand inStock status purchasable";

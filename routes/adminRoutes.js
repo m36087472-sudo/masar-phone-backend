@@ -1032,6 +1032,26 @@ router.post("/products", authMiddleware, uploadProductImage.fields([{ name: "ima
       try { productData.colors = JSON.parse(body.colors); } catch { /* ignore */ }
     }
 
+    // Country prices — parsed from JSON string
+    if (body.countryPrices) {
+      try {
+        const parsed = JSON.parse(body.countryPrices);
+        if (parsed && typeof parsed === "object") {
+          const { SUPPORTED_CURRENCIES, roundPrice } = require("../config/countries");
+          const cpMap = {};
+          for (const [cur, entry] of Object.entries(parsed)) {
+            if (!SUPPORTED_CURRENCIES.includes(cur)) continue;
+            const e = entry;
+            const orig = Number(e.originalPrice);
+            if (!Number.isFinite(orig) || orig < 0) continue;
+            const sale = (e.salePrice != null && e.salePrice !== "") ? Number(e.salePrice) : null;
+            cpMap[cur] = { currency: cur, originalPrice: roundPrice(orig, cur), salePrice: sale !== null ? roundPrice(sale, cur) : null };
+          }
+          productData.countryPrices = cpMap;
+        }
+      } catch { /* ignore invalid JSON */ }
+    }
+
     // Main image: file upload or URL
     if (req.files?.image?.[0]) {
       const result = await uploadToCloudinary(req.files.image[0].buffer, "products");
@@ -1166,6 +1186,28 @@ router.put("/products/:id", authMiddleware, uploadProductImage.fields([{ name: "
 
     if (body.colors !== undefined) {
       try { $set.colors = JSON.parse(body.colors); } catch { /* ignore */ }
+    }
+
+    // Country prices — parsed from JSON string
+    if (body.countryPrices !== undefined) {
+      try {
+        const parsed = JSON.parse(body.countryPrices);
+        if (parsed && typeof parsed === "object") {
+          const { SUPPORTED_CURRENCIES, roundPrice } = require("../config/countries");
+          for (const [cur, entry] of Object.entries(parsed)) {
+            if (!SUPPORTED_CURRENCIES.includes(cur)) continue;
+            const e = entry;
+            const orig = Number(e.originalPrice);
+            if (!Number.isFinite(orig) || orig < 0) continue;
+            const sale = (e.salePrice != null && e.salePrice !== "") ? Number(e.salePrice) : null;
+            $set[`countryPrices.${cur}`] = {
+              currency: cur,
+              originalPrice: roundPrice(orig, cur),
+              salePrice: sale !== null ? roundPrice(sale, cur) : null,
+            };
+          }
+        }
+      } catch { /* ignore */ }
     }
 
     // Image: needs old URL for Cloudinary delete — fetch only if replacing/removing
@@ -1527,6 +1569,190 @@ router.delete("/category-banners/:category/:index", authMiddleware, async (req, 
     res.status(500).json({ error: "خطأ في الخادم" });
   }
 });
+
+// ── Exchange Rates ────────────────────────────────────────────────────────────
+const ExchangeRate = require("../models/ExchangeRate");
+const { SUPPORTED_CURRENCIES, COUNTRY_LIST, roundPrice } = require("../config/countries");
+
+/**
+ * Seed default rates on first access if the collection is empty.
+ * These are reference rates — admin can update them anytime.
+ */
+const DEFAULT_RATES = { SAR: 1.0, AED: 0.9806, QAR: 1.0254, KWD: 0.0818, OMR: 0.1028 };
+
+async function ensureRatesSeeded() {
+  const count = await ExchangeRate.countDocuments();
+  if (count > 0) return;
+  const docs = COUNTRY_LIST.map((c) => ({
+    currency: c.currency,
+    rate: DEFAULT_RATES[c.currency] || 1,
+    label: `1 SAR = ${DEFAULT_RATES[c.currency] || 1} ${c.currency}`,
+  }));
+  await ExchangeRate.insertMany(docs);
+}
+
+// GET /api/admin/exchange-rates  (public — frontend uses this to show country config, not for conversion)
+router.get("/exchange-rates", async (req, res) => {
+  try {
+    await ensureRatesSeeded();
+    const rates = await ExchangeRate.find().sort({ currency: 1 }).lean();
+    res.json(rates);
+  } catch {
+    res.status(500).json({ error: "خطأ في الخادم" });
+  }
+});
+
+// PUT /api/admin/exchange-rates/:currency  (admin only)
+router.put("/exchange-rates/:currency", authMiddleware, requireRole("super_admin", "admin"), async (req, res) => {
+  try {
+    const { currency } = req.params;
+    if (!SUPPORTED_CURRENCIES.includes(currency)) {
+      return res.status(400).json({ error: "عملة غير مدعومة" });
+    }
+    const rate = Number(req.body.rate);
+    if (!Number.isFinite(rate) || rate <= 0) {
+      return res.status(400).json({ error: "معامل الصرف يجب أن يكون رقماً موجباً" });
+    }
+    const label = `1 SAR = ${rate} ${currency}`;
+    const updatedBy = req.admin?.email || "";
+    const doc = await ExchangeRate.findOneAndUpdate(
+      { currency },
+      { $set: { rate, label, updatedBy } },
+      { upsert: true, new: true }
+    );
+    res.json(doc);
+  } catch {
+    res.status(500).json({ error: "خطأ في الخادم" });
+  }
+});
+
+// ── Product Country Prices (direct admin manipulation) ────────────────────────
+
+/**
+ * PATCH /api/admin/products/:id/country-prices
+ * Update one or more country price entries for a product.
+ * Body: { prices: { AED: { originalPrice, salePrice }, QAR: {...}, ... } }
+ * Does NOT touch SAR originalPrice/salePrice (those are on the root fields).
+ */
+router.patch("/products/:id/country-prices", authMiddleware, requireRole("super_admin", "admin"), async (req, res) => {
+  try {
+    const { prices } = req.body;
+    if (!prices || typeof prices !== "object") {
+      return res.status(400).json({ error: "prices مطلوب" });
+    }
+
+    const $set = {};
+    const errors = [];
+
+    for (const [currency, entry] of Object.entries(prices)) {
+      if (!SUPPORTED_CURRENCIES.includes(currency)) {
+        errors.push(`عملة غير مدعومة: ${currency}`);
+        continue;
+      }
+      const orig = Number(entry.originalPrice);
+      if (!Number.isFinite(orig) || orig < 0) {
+        errors.push(`${currency}: originalPrice غير صحيح`);
+        continue;
+      }
+      const sale = entry.salePrice !== undefined && entry.salePrice !== null && entry.salePrice !== ""
+        ? Number(entry.salePrice)
+        : null;
+      if (sale !== null && (!Number.isFinite(sale) || sale < 0)) {
+        errors.push(`${currency}: salePrice غير صحيح`);
+        continue;
+      }
+
+      $set[`countryPrices.${currency}`] = {
+        currency,
+        originalPrice: roundPrice(orig, currency),
+        salePrice: sale !== null ? roundPrice(sale, currency) : null,
+      };
+    }
+
+    if (errors.length > 0) {
+      return res.status(400).json({ error: errors.join(", ") });
+    }
+
+    const product = await Product.findByIdAndUpdate(
+      req.params.id,
+      { $set },
+      { new: true, select: "name countryPrices" }
+    );
+    if (!product) return res.status(404).json({ error: "المنتج غير موجود" });
+
+    // Invalidate product cache
+    const urls = (process.env.FRONTEND_URL || "http://localhost:3000")
+      .split(",").map((u) => u.trim()).filter(Boolean);
+    Promise.allSettled(
+      urls.map((base) =>
+        fetch(`${base}/api/revalidate?secret=${process.env.REVALIDATE_SECRET}&tag=products`, { method: "POST" })
+      )
+    ).catch(() => {});
+
+    res.json({ ok: true, countryPrices: Object.fromEntries(product.countryPrices || new Map()) });
+  } catch {
+    res.status(500).json({ error: "خطأ في الخادم" });
+  }
+});
+
+/**
+ * POST /api/admin/products/:id/country-prices/generate-from-sar
+ * Auto-generate all missing country prices from the product's SAR price
+ * using the current exchange rates stored in DB.
+ * Only fills missing currencies — never overwrites existing entries.
+ * Body: { overwrite: false } (optional — true forces regeneration of all)
+ */
+router.post("/products/:id/country-prices/generate-from-sar", authMiddleware, requireRole("super_admin", "admin"), async (req, res) => {
+  try {
+    const product = await Product.findById(req.params.id).lean();
+    if (!product) return res.status(404).json({ error: "المنتج غير موجود" });
+
+    const overwrite = req.body.overwrite === true;
+    const rates = await ExchangeRate.find().lean();
+    const rateMap = {};
+    for (const r of rates) rateMap[r.currency] = r.rate;
+
+    const sarOriginal = product.originalPrice;
+    const sarSale = product.salePrice ?? null;
+
+    const current = product.countryPrices instanceof Map
+      ? Object.fromEntries(product.countryPrices)
+      : (product.countryPrices || {});
+
+    const $set = {};
+    const generated = [];
+
+    for (const currency of SUPPORTED_CURRENCIES) {
+      if (!overwrite && current[currency]) continue; // skip existing unless overwrite
+      const rate = rateMap[currency] || 1;
+      const orig = roundPrice(sarOriginal * rate, currency);
+      const sale = sarSale !== null ? roundPrice(sarSale * rate, currency) : null;
+      $set[`countryPrices.${currency}`] = { currency, originalPrice: orig, salePrice: sale };
+      generated.push(currency);
+    }
+
+    if (generated.length === 0) {
+      return res.json({ ok: true, generated: [], message: "جميع الأسعار موجودة بالفعل" });
+    }
+
+    await Product.findByIdAndUpdate(req.params.id, { $set });
+
+    // Invalidate cache
+    const urls = (process.env.FRONTEND_URL || "http://localhost:3000")
+      .split(",").map((u) => u.trim()).filter(Boolean);
+    Promise.allSettled(
+      urls.map((base) =>
+        fetch(`${base}/api/revalidate?secret=${process.env.REVALIDATE_SECRET}&tag=products`, { method: "POST" })
+      )
+    ).catch(() => {});
+
+    res.json({ ok: true, generated });
+  } catch {
+    res.status(500).json({ error: "خطأ في الخادم" });
+  }
+});
+
+// ── End Exchange Rates ─────────────────────────────────────────────────────────
 
 // GET /api/admin/card-field-settings
 router.get("/card-field-settings", async (req, res) => {

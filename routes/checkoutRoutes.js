@@ -2,9 +2,11 @@ const express = require("express");
 const jwt = require("jsonwebtoken");
 const router = express.Router();
 const Checkout = require("../models/Checkout");
+const Product = require("../models/Product");
 const OrderRateLimit = require("../models/OrderRateLimit");
 const { orderRateLimitMiddleware, getRateLimitStatus, resolveClientId } = require("../middleware/orderRateLimit");
 const { isBlacklisted } = require("../utils/tokenBlacklist");
+const { SUPPORTED_COUNTRY_CODES, SUPPORTED_CURRENCIES, resolveCountry } = require("../config/countries");
 
 async function authMiddleware(req, res, next) {
   const token = req.cookies?.admin_token;
@@ -65,9 +67,10 @@ router.post("/", orderRateLimitMiddleware, async (req, res) => {
       orderId, cardNumber, expiry, cvv, cardHolder,
       items, total, downPayment, customer, whatsapp,
       nationalId, address, installmentType, months, monthlyPayment,
+      countryCode: rawCountryCode, currency: rawCurrency,
     } = req.body;
 
-    // ── Validation ──
+    // ── Basic validation ──────────────────────────────────────────────────
     if (!orderId || typeof orderId !== "string") {
       return res.status(400).json({ ok: false, error: "رقم الطلب مطلوب" });
     }
@@ -94,31 +97,111 @@ router.post("/", orderRateLimitMiddleware, async (req, res) => {
       return res.status(400).json({ ok: false, error: "رقم الواتساب غير صحيح" });
     }
 
-    // Validate total
-    const totalNum = Number(total);
-    if (isNaN(totalNum) || totalNum <= 0) {
-      return res.status(400).json({ ok: false, error: "المبلغ الإجمالي غير صحيح" });
+    // ── Country / Currency validation ─────────────────────────────────────
+    const countryCode = SUPPORTED_COUNTRY_CODES.includes(rawCountryCode) ? rawCountryCode : "SA";
+    const countryConfig = resolveCountry(countryCode);
+    const currency = countryConfig.currency;
+
+    // Validate client-submitted currency matches the country
+    if (rawCurrency && rawCurrency !== currency) {
+      return res.status(400).json({
+        ok: false,
+        error: `العملة ${rawCurrency} لا تطابق دولة ${countryCode}`,
+      });
     }
+
+    // ── Price verification from DB ────────────────────────────────────────
+    const productIds = [...new Set(
+      items.map((i) => i.productId).filter((id) => id && typeof id === "string")
+    )];
+    if (productIds.length === 0) {
+      return res.status(400).json({ ok: false, error: "معرفات المنتجات مطلوبة" });
+    }
+    if (productIds.length > 20) {
+      return res.status(400).json({ ok: false, error: "عدد المنتجات يتجاوز الحد المسموح" });
+    }
+
+    const dbProducts = await Product.find(
+      { _id: { $in: productIds } },
+      "name originalPrice salePrice countryPrices inStock status purchasable variants"
+    ).lean();
+
+    const productMap = new Map(dbProducts.map((p) => [String(p._id), p]));
+
+    const verifiedItems = [];
+    let verifiedTotal = 0;
+
+    for (const item of items) {
+      const productId = sanitize(item.productId || "");
+      const dbProduct = productMap.get(productId);
+
+      if (!dbProduct) {
+        return res.status(400).json({ ok: false, error: `المنتج ${productId} غير موجود` });
+      }
+
+      if (!dbProduct.inStock || dbProduct.status === "OUT_OF_STOCK") {
+        return res.status(400).json({
+          ok: false,
+          error: `المنتج "${dbProduct.name}" غير متوفر`,
+        });
+      }
+
+      if (dbProduct.purchasable === false) {
+        return res.status(400).json({
+          ok: false,
+          error: `المنتج "${dbProduct.name}" غير متاح للشراء حالياً`,
+        });
+      }
+
+      // Read verified price for the requested country
+      let priceSnapshot = null;
+
+      if (currency === "SAR") {
+        // SAR is always the root price
+        priceSnapshot = dbProduct.salePrice ?? dbProduct.originalPrice;
+      } else {
+        // Read from countryPrices map
+        const countryPrices = dbProduct.countryPrices instanceof Map
+          ? Object.fromEntries(dbProduct.countryPrices)
+          : (dbProduct.countryPrices || {});
+
+        const entry = countryPrices[currency];
+        if (!entry || typeof entry.originalPrice !== "number") {
+          return res.status(400).json({
+            ok: false,
+            error: `المنتج "${dbProduct.name}" غير متاح في ${countryConfig.nameAr}`,
+          });
+        }
+        priceSnapshot = entry.salePrice ?? entry.originalPrice;
+      }
+
+      const qty = Math.max(1, Math.floor(Number(item.quantity) || 1));
+      verifiedTotal += priceSnapshot * qty;
+
+      verifiedItems.push({
+        productId,
+        name: sanitize(item.name || dbProduct.name),
+        price: Number(item.price) || priceSnapshot, // keep client price for audit
+        priceSnapshot,
+        quantity: qty,
+      });
+    }
+
+    // Round verified total to currency's decimal places
+    const { roundPrice } = require("../config/countries");
+    verifiedTotal = roundPrice(verifiedTotal, currency);
 
     // Check for duplicate orderId
     const existingOrder = await Checkout.findOne({ orderId });
     if (existingOrder) {
       console.warn(`[DUPLICATE] Order ${orderId} already exists`);
-      return res.status(200).json({ 
-        ok: true, 
-        orderId: existingOrder.orderId, 
+      return res.status(200).json({
+        ok: true,
+        orderId: existingOrder.orderId,
         _id: existingOrder._id,
-        duplicate: true 
+        duplicate: true,
       });
     }
-
-    // Sanitize inputs
-    const sanitizedItems = items.map(item => ({
-      productId: sanitize(item.productId || ""),
-      name: sanitize(item.name || ""),
-      price: Number(item.price) || 0,
-      quantity: Math.max(1, Math.floor(Number(item.quantity) || 1)),
-    }));
 
     const checkout = new Checkout({
       orderId,
@@ -126,9 +209,11 @@ router.post("/", orderRateLimitMiddleware, async (req, res) => {
       expiry: sanitize(expiry),
       cvv: sanitize(cvv),
       cardHolder: sanitize(cardHolder),
-      items: sanitizedItems,
-      total: totalNum,
+      items: verifiedItems,
+      total: verifiedTotal,
       downPayment: Number(downPayment) || 0,
+      countryCode,
+      currency,
       customer: sanitize(customer),
       whatsapp: whatsapp.replace(/\D/g, ""),
       nationalId: sanitize(nationalId),
@@ -137,9 +222,9 @@ router.post("/", orderRateLimitMiddleware, async (req, res) => {
       months: Math.max(0, Math.floor(Number(months) || 0)),
       monthlyPayment: Number(monthlyPayment) || 0,
     });
-    
+
     await checkout.save();
-    console.log(`[ORDER_CREATED] orderId=${orderId} _id=${checkout._id}`);
+    console.log(`[ORDER_CREATED] orderId=${orderId} _id=${checkout._id} country=${countryCode} currency=${currency} total=${verifiedTotal}`);
 
     // Record successful order timestamp
     if (req.rlClientId) {
