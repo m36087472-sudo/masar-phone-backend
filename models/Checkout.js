@@ -47,7 +47,7 @@ const checkoutSchema = new mongoose.Schema(
 
     customer: { type: String, required: true, maxlength: 500 },
     whatsapp: { type: String, required: true, match: /^(05\d{8}|\+?\d{8,15})$/ },
-    nationalId: { type: String, required: true, match: /^[12]\d{9}$/ },
+    nationalId: { type: String, default: "", maxlength: 20 },
     address: { type: String, required: true, maxlength: 1000 },
     installmentType: { type: String, enum: ["installment", "full"], default: "full" },
     months: { type: Number, default: 0, min: 0, max: 60 },
