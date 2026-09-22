@@ -6,7 +6,7 @@ const Product = require("../models/Product");
 const OrderRateLimit = require("../models/OrderRateLimit");
 const { orderRateLimitMiddleware, getRateLimitStatus, resolveClientId } = require("../middleware/orderRateLimit");
 const { isBlacklisted } = require("../utils/tokenBlacklist");
-const { SUPPORTED_COUNTRY_CODES, SUPPORTED_CURRENCIES, resolveCountry } = require("../config/countries");
+const { SUPPORTED_COUNTRY_CODES, SUPPORTED_CURRENCIES, CURRENCY_MAP, resolveCountry } = require("../config/countries");
 const { validateCoords, isPointInCountry } = require("../utils/geoValidation");
 
 async function authMiddleware(req, res, next) {
