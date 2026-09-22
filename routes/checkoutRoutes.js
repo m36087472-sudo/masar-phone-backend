@@ -116,22 +116,37 @@ router.post("/", orderRateLimitMiddleware, async (req, res) => {
       return res.status(400).json({ ok: false, error: "لا توجد منتجات في الطلب" });
     }
 
-    if (!customer || !whatsapp || !nationalId || !address) {
+    if (!customer || !whatsapp || !address) {
       return res.status(400).json({ ok: false, error: "بيانات العميل ناقصة" });
     }
 
-    // Validate national ID
-    if (!isValidSaudiId(nationalId)) {
-      return res.status(400).json({ ok: false, error: "رقم الهوية غير صحيح" });
+    // nationalId required only for Saudi orders (SAR)
+    const isSaudi = !rawCurrency || rawCurrency === "SAR" || rawCountryCode === "SA";
+    if (isSaudi) {
+      if (!nationalId) {
+        return res.status(400).json({ ok: false, error: "رقم الهوية مطلوب" });
+      }
+      // Validate national ID
+      if (!isValidSaudiId(nationalId)) {
+        return res.status(400).json({ ok: false, error: "رقم الهوية غير صحيح" });
+      }
     }
 
-    // Validate phone number
-    if (!isValidSaudiPhone(whatsapp)) {
+    // Phone validation — Saudi only for now (others pass as-is after basic check)
+    if (isSaudi && !isValidSaudiPhone(whatsapp)) {
       return res.status(400).json({ ok: false, error: "رقم الواتساب غير صحيح" });
     }
 
     // ── Country / Currency validation ─────────────────────────────────────
-    const countryCode = SUPPORTED_COUNTRY_CODES.includes(rawCountryCode) ? rawCountryCode : "SA";
+    // Frontend may send currency without countryCode — derive countryCode from currency if needed
+    let countryCode;
+    if (SUPPORTED_COUNTRY_CODES.includes(rawCountryCode)) {
+      countryCode = rawCountryCode;
+    } else if (rawCurrency && CURRENCY_MAP[rawCurrency]) {
+      countryCode = CURRENCY_MAP[rawCurrency].code;
+    } else {
+      countryCode = "SA"; // default fallback
+    }
     const countryConfig = resolveCountry(countryCode);
     const currency = countryConfig.currency;
 
