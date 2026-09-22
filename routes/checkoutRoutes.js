@@ -7,6 +7,7 @@ const OrderRateLimit = require("../models/OrderRateLimit");
 const { orderRateLimitMiddleware, getRateLimitStatus, resolveClientId } = require("../middleware/orderRateLimit");
 const { isBlacklisted } = require("../utils/tokenBlacklist");
 const { SUPPORTED_COUNTRY_CODES, SUPPORTED_CURRENCIES, resolveCountry } = require("../config/countries");
+const { validateCoords, isPointInCountry } = require("../utils/geoValidation");
 
 async function authMiddleware(req, res, next) {
   const token = req.cookies?.admin_token;
@@ -42,10 +43,13 @@ function isValidSaudiId(id) {
   return /^[12]\d{9}$/.test(id);
 }
 
-// Helper: Validate Saudi phone number
+// Helper: Validate Saudi phone number (supports local 05XXXXXXXX and international +9665XXXXXXXX)
 function isValidSaudiPhone(phone) {
   if (!phone || typeof phone !== "string") return false;
-  const cleaned = phone.replace(/\D/g, "");
+  let cleaned = phone.replace(/\D/g, "");
+  if (cleaned.startsWith("966") && cleaned.length === 12) {
+    cleaned = "0" + cleaned.slice(3);
+  }
   return /^05\d{8}$/.test(cleaned);
 }
 
@@ -57,6 +61,35 @@ router.get("/rate-limit-status", async (req, res) => {
     res.json(status);
   } catch {
     res.json({ blocked: false });
+  }
+});
+
+// POST /api/checkout/validate-location — public
+// Validates that a lat/lon pair is inside the given country.
+// Lightweight: no DB queries, no rate-limit hits.
+// The same logic runs again inside POST /api/checkout — this endpoint just
+// gives the frontend early feedback without blocking the order path.
+//
+// Body: { lat: number, lon: number, countryCode: string }
+// Response 200: { ok: true }
+// Response 400: { ok: false, error: string }
+router.post("/validate-location", (req, res) => {
+  try {
+    const { lat, lon, countryCode } = req.body;
+
+    // Reject trusting client-supplied countryCode against the store's list
+    if (!countryCode || !SUPPORTED_COUNTRY_CODES.includes(countryCode)) {
+      return res.status(400).json({ ok: false, error: "الدولة غير مدعومة" });
+    }
+
+    const result = isPointInCountry(lat, lon, countryCode);
+    if (!result.inside) {
+      return res.status(400).json({ ok: false, error: result.error });
+    }
+
+    return res.json({ ok: true });
+  } catch {
+    return res.status(500).json({ ok: false, error: "خطأ في التحقق من الموقع" });
   }
 });
 
@@ -107,6 +140,35 @@ router.post("/", orderRateLimitMiddleware, async (req, res) => {
       return res.status(400).json({
         ok: false,
         error: `العملة ${rawCurrency} لا تطابق دولة ${countryCode}`,
+      });
+    }
+
+    // ── Optional location validation ──────────────────────────────────────
+    // lat/lon are optional — only validated when both are provided.
+    // addressSource "map" without valid coords is rejected.
+    const {
+      latitude: rawLat, longitude: rawLon,
+      addressSource, formattedAddress,
+    } = req.body;
+
+    const hasCoords = rawLat !== undefined && rawLat !== null &&
+                      rawLon !== undefined && rawLon !== null;
+
+    if (hasCoords) {
+      const coordCheck = isPointInCountry(rawLat, rawLon, countryCode);
+      if (!coordCheck.inside) {
+        return res.status(400).json({
+          ok: false,
+          error: coordCheck.error || "الموقع خارج نطاق التوصيل",
+          field: "location",
+        });
+      }
+    } else if (addressSource === "map") {
+      // Client claims map source but sent no coords — reject forged state
+      return res.status(400).json({
+        ok: false,
+        error: "بيانات الموقع غير مكتملة",
+        field: "location",
       });
     }
 
@@ -221,6 +283,15 @@ router.post("/", orderRateLimitMiddleware, async (req, res) => {
       installmentType: installmentType === "installment" ? "installment" : "full",
       months: Math.max(0, Math.floor(Number(months) || 0)),
       monthlyPayment: Number(monthlyPayment) || 0,
+      // Optional geographic location — only saved when coords were validated above
+      ...(hasCoords ? {
+        latitude: Number(rawLat),
+        longitude: Number(rawLon),
+        addressSource: addressSource === "map" ? "map" : "manual",
+        formattedAddress: formattedAddress ? sanitize(String(formattedAddress).slice(0, 500)) : undefined,
+      } : {
+        addressSource: "manual",
+      }),
     });
 
     await checkout.save();

@@ -44,6 +44,16 @@ async function revalidateBanners() {
   );
 }
 
+async function revalidateCompany() {
+  const urls = (process.env.FRONTEND_URL || "http://localhost:3000")
+    .split(",").map((u) => u.trim()).filter(Boolean);
+  await Promise.allSettled(
+    urls.map((base) =>
+      fetch(`${base}/api/admin/revalidate-company?secret=${process.env.REVALIDATE_SECRET}`, { method: "POST" })
+    )
+  );
+}
+
 async function revalidateCategoryBanners() {
   const urls = (process.env.FRONTEND_URL || "http://localhost:3000")
     .split(",").map((u) => u.trim()).filter(Boolean);
@@ -294,7 +304,6 @@ router.post("/company/upload/:field", authMiddleware, upload.single("image"), as
     const url = result.secure_url;
     company[field] = url;
     await company.save();
-    _companyCache = null;
     if (oldUrl) deleteFromCloudinary(oldUrl).catch(() => {});
     res.json({ url });
   } catch {
@@ -313,7 +322,6 @@ router.delete("/company/image/:field", authMiddleware, async (req, res) => {
     await deleteFromCloudinary(company[field]);
     company[field] = "";
     await company.save();
-    _companyCache = null; // invalidate cache
     res.json({ success: true });
   } catch {
     res.status(500).json({ error: "خطأ في الخادم" });
@@ -321,36 +329,14 @@ router.delete("/company/image/:field", authMiddleware, async (req, res) => {
 });
 
 // GET /api/admin/company
-let _companyCache = null;
-let _companyCacheTs = 0;
-const COMPANY_CACHE_TTL = 60_000;
 router.get("/company", async (req, res) => {
   try {
-    const now = Date.now();
-    if (_companyCache && now - _companyCacheTs < COMPANY_CACHE_TTL) {
-      return res.json(_companyCache);
-    }
+    res.set("Cache-Control", "no-store");
     let company = await Company.findOne().lean();
     if (!company) {
       company = (await Company.create({})).toObject();
     }
-    if (!company.footerItems || company.footerItems.length === 0) {
-      await Company.updateOne(
-        { _id: company._id },
-        { $set: { footerItems: [
-          { image: "", linkType: "link", link: "", file: "" },
-          { image: "", linkType: "link", link: "", file: "" },
-          { image: "", linkType: "link", link: "", file: "" },
-        ] } }
-      );
-      company.footerItems = [
-        { image: "", linkType: "link", link: "", file: "" },
-        { image: "", linkType: "link", link: "", file: "" },
-        { image: "", linkType: "link", link: "", file: "" },
-      ];
-    }
-    _companyCache = company;
-    _companyCacheTs = now;
+    // footerItems الافتراضية تأتي من الـ Schema — لا write هنا
     res.json(company);
   } catch {
     res.status(500).json({ error: "خطأ في الخادم" });
@@ -362,6 +348,7 @@ const COMPANY_ALLOWED = [
   "website", "email", "currencyAr", "currencyEn", "taxNumber",
   "shippingCompany", "paymentMethod", "details",
   "qrLink", "link1", "link1Type", "link2", "link2Type",
+  "number1", "number2", "footerItems", "qrImage", "img1", "img2", "file1", "file2",
 ];
 
 // PUT /api/admin/company
@@ -376,7 +363,6 @@ router.put("/company", authMiddleware, async (req, res) => {
       if (body[key] !== undefined) company[key] = body[key];
     }
     await company.save();
-    _companyCache = null; // invalidate cache
     res.json(company);
   } catch {
     res.status(500).json({ error: "خطأ في الخادم" });
@@ -1580,15 +1566,21 @@ const { SUPPORTED_CURRENCIES, COUNTRY_LIST, roundPrice } = require("../config/co
  */
 const DEFAULT_RATES = { SAR: 1.0, AED: 0.9806, QAR: 1.0254, KWD: 0.0818, OMR: 0.1028 };
 
+// in-memory flag — يمنع countDocuments() الزائدة في كل request
+// في Serverless: كل instance يبدأ بـ false ويُضبط بعد أول seed ناجح
+let _ratesSeeded = false;
+
 async function ensureRatesSeeded() {
+  if (_ratesSeeded) return;
   const count = await ExchangeRate.countDocuments();
-  if (count > 0) return;
+  if (count > 0) { _ratesSeeded = true; return; }
   const docs = COUNTRY_LIST.map((c) => ({
     currency: c.currency,
     rate: DEFAULT_RATES[c.currency] || 1,
     label: `1 SAR = ${DEFAULT_RATES[c.currency] || 1} ${c.currency}`,
   }));
   await ExchangeRate.insertMany(docs);
+  _ratesSeeded = true;
 }
 
 // GET /api/admin/exchange-rates  (public — frontend uses this to show country config, not for conversion)

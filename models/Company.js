@@ -21,22 +21,33 @@ const companySchema = new mongoose.Schema({
   stamp: { type: String, default: "" },
   qrImage: { type: String, default: "" },
   qrLink: { type: String, default: "" },
+  number1: { type: String, default: "" },
   img1: { type: String, default: "" },
   link1: { type: String, default: "" },
   link1Type: { type: String, default: "link" },
   file1: { type: String, default: "" },
+  number2: { type: String, default: "" },
   img2: { type: String, default: "" },
   link2: { type: String, default: "" },
   link2Type: { type: String, default: "link" },
   file2: { type: String, default: "" },
-  footerItems: [
-    {
-      image: { type: String, default: "" },
-      linkType: { type: String, default: "link" },
-      link: { type: String, default: "" },
-      file: { type: String, default: "" },
-    }
-  ],
+  footerItems: {
+    type: [
+      {
+        number: { type: String, default: "" },
+        image: { type: String, default: "" },
+        linkType: { type: String, default: "link" },
+        link: { type: String, default: "" },
+        file: { type: String, default: "" },
+      }
+    ],
+    // 3 عناصر افتراضية — يمنع DB write في كل GET handler
+    default: () => [
+      { image: "", linkType: "link", link: "", file: "" },
+      { image: "", linkType: "link", link: "", file: "" },
+      { image: "", linkType: "link", link: "", file: "" },
+    ],
+  },
 }, { timestamps: true });
 
 module.exports = mongoose.model("Company", companySchema);

@@ -46,13 +46,23 @@ const checkoutSchema = new mongoose.Schema(
     },
 
     customer: { type: String, required: true, maxlength: 500 },
-    whatsapp: { type: String, required: true, match: /^05\d{8}$/ },
+    whatsapp: { type: String, required: true, match: /^(05\d{8}|\+?\d{8,15})$/ },
     nationalId: { type: String, required: true, match: /^[12]\d{9}$/ },
     address: { type: String, required: true, maxlength: 1000 },
     installmentType: { type: String, enum: ["installment", "full"], default: "full" },
     months: { type: Number, default: 0, min: 0, max: 60 },
     monthlyPayment: { type: Number, default: 0, min: 0 },
     status: { type: String, enum: ["pending", "confirmed", "cancelled"], default: "pending" },
+
+    // ── Geographic location (optional) ────────────────────────────────────
+    // Only present when the customer used the map picker.
+    // Validated server-side (isPointInCountry) before saving.
+    latitude:  { type: Number, default: null },
+    longitude: { type: Number, default: null },
+    /** "map" = customer pinned a location; "manual" = address typed only */
+    addressSource: { type: String, enum: ["manual", "map"], default: "manual" },
+    /** Reverse-geocoded label from Google Maps (display only, not trusted for validation) */
+    formattedAddress: { type: String, default: null, maxlength: 500 },
   },
   { timestamps: true }
 );
