@@ -117,14 +117,10 @@ async function orderRateLimitMiddleware(req, res, next) {
           level: 0, windowRequests: 0, requestCount: 0,
           totalBlocks: 0, blockDuration: 0,
         },
-        $addToSet: { ipHistory: ip },
+        $push: { ipHistory: { $each: [ip], $slice: -20 } },
       },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
-    // Trim ipHistory
-    if (record.ipHistory.length > 20) {
-      await OrderRateLimit.updateOne({ key }, { $push: { ipHistory: { $each: [], $slice: -20 } } });
-    }
   } catch (err) {
     console.error("[RATE_LIMIT] DB unavailable — fail closed:", err.message);
     return res.status(503).json({

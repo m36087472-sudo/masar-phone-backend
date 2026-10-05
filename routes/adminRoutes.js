@@ -363,6 +363,7 @@ router.put("/company", authMiddleware, async (req, res) => {
       if (body[key] !== undefined) company[key] = body[key];
     }
     await company.save();
+    revalidateCompany().catch(() => {});
     res.json(company);
   } catch {
     res.status(500).json({ error: "خطأ في الخادم" });
@@ -435,6 +436,7 @@ router.post("/banners/add", authMiddleware, async (req, res) => {
     if (doc.banners.length >= 10) return res.status(400).json({ error: "الحد الأقصى 10 بانرات" });
     doc.banners.push({ url: "", active: true });
     await doc.save();
+    revalidateBanners().catch(() => {});
     res.json({ index: doc.banners.length - 1, total: doc.banners.length });
   } catch {
     res.status(500).json({ error: "خطأ في الخادم" });
@@ -771,6 +773,7 @@ router.patch("/sub-categories/max", authMiddleware, async (req, res) => {
       { $set: { order: val, showInHome: false } },
       { upsert: true }
     );
+    revalidateHomeSettings().catch(() => {});
     res.json({ max: val });
   } catch {
     res.status(500).json({ error: "خطأ في الخادم" });
@@ -1336,6 +1339,7 @@ router.post("/company/footer-image/:key", authMiddleware, uploadFooterImg.single
     const result = await uploadToCloudinary(req.file.buffer, "company");
     company[key] = result.secure_url;
     await company.save();
+    revalidateCompany().catch(() => {});
     res.json({ url: company[key] });
   } catch {
     res.status(500).json({ error: "خطأ في الخادم" });
@@ -1354,6 +1358,7 @@ router.post("/company/footer-file/:key", authMiddleware, uploadDoc.single("file"
     const result = await uploadToCloudinary(req.file.buffer, "docs", { resource_type: "raw" });
     company[key] = result.secure_url;
     await company.save();
+    revalidateCompany().catch(() => {});
     res.json({ url: company[key] });
   } catch {
     res.status(500).json({ error: "خطأ في الخادم" });
@@ -1375,6 +1380,7 @@ router.post("/company/footer-items/image/:index", authMiddleware, uploadFooterIm
     company.footerItems[index].image = result.secure_url;
     company.markModified("footerItems");
     await company.save();
+    revalidateCompany().catch(() => {});
     res.json({ url: company.footerItems[index].image });
   } catch {
     res.status(500).json({ error: "خطأ في الخادم" });
@@ -1396,6 +1402,7 @@ router.post("/company/footer-items/file/:index", authMiddleware, uploadDoc.singl
     company.footerItems[index].file = result.secure_url;
     company.markModified("footerItems");
     await company.save();
+    revalidateCompany().catch(() => {});
     res.json({ url: company.footerItems[index].file });
   } catch {
     res.status(500).json({ error: "خطأ في الخادم" });
@@ -1409,6 +1416,7 @@ router.post("/company/footer-items/add", authMiddleware, async (req, res) => {
     if (!company) company = await Company.create({});
     company.footerItems.push({ image: "", linkType: "link", link: "", file: "" });
     await company.save();
+    revalidateCompany().catch(() => {});
     res.json({ index: company.footerItems.length - 1 });
   } catch {
     res.status(500).json({ error: "خطأ في الخادم" });
@@ -1429,6 +1437,7 @@ router.delete("/company/footer-items/:index", authMiddleware, async (req, res) =
     company.footerItems.splice(index, 1);
     company.markModified("footerItems");
     await company.save();
+    revalidateCompany().catch(() => {});
     res.json({ success: true });
   } catch {
     res.status(500).json({ error: "خطأ في الخادم" });
@@ -1514,6 +1523,7 @@ router.post("/category-banners/:category/add", authMiddleware, async (req, res) 
     if (doc.banners.length >= 10) return res.status(400).json({ error: "الحد الأقصى 10 بانرات" });
     doc.banners.push({ url: "", active: true });
     await doc.save();
+    revalidateCategoryBanners().catch(() => {});
     res.json({ index: doc.banners.length - 1 });
   } catch {
     res.status(500).json({ error: "خطأ في الخادم" });
@@ -1532,6 +1542,7 @@ router.delete("/category-banners/:category/:index/image", authMiddleware, async 
     doc.banners.set(index, { url: "", active: doc.banners[index].active });
     await doc.save();
     if (oldUrl) deleteFromCloudinary(oldUrl).catch(() => {});
+    revalidateCategoryBanners().catch(() => {});
     res.json({ success: true });
   } catch {
     res.status(500).json({ error: "خطأ في الخادم" });
@@ -1550,6 +1561,7 @@ router.delete("/category-banners/:category/:index", authMiddleware, async (req, 
     doc.banners.splice(index, 1);
     await doc.save();
     if (oldUrl) deleteFromCloudinary(oldUrl).catch(() => {});
+    revalidateCategoryBanners().catch(() => {});
     res.json({ success: true });
   } catch {
     res.status(500).json({ error: "خطأ في الخادم" });
