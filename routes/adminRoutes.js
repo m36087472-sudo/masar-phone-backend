@@ -780,13 +780,14 @@ router.patch("/sub-categories/max", authMiddleware, async (req, res) => {
   }
 });
 
-// حقول البطاقة الحساسة — لا تُرجع في قائمة الطلبات
-const ORDER_LIST_SELECT = "-cardNumber -cvv -expiry";
+// حقول جدول قائمة الطلبات — خفيفة جداً وسريعة
+const ORDER_TABLE_SELECT = "_id orderId customer whatsapp installmentType months total downPayment status createdAt";
+const ORDER_DETAIL_SELECT = "-cardNumber -cvv -expiry";
 
 // GET /api/admin/orders/count — خفيف جداً، للـ Navbar badge فقط
 router.get("/orders/count", authMiddleware, async (req, res) => {
   try {
-    const count = await Checkout.countDocuments();
+    const count = await Checkout.estimatedDocumentCount();
     res.json({ count });
   } catch {
     res.status(500).json({ ok: false, error: "خطأ في الخادم" });
@@ -832,14 +833,18 @@ router.get("/orders", authMiddleware, requireRole("super_admin", "admin"), async
       filter.status = status;
     }
 
+    const totalPromise = Object.keys(filter).length === 0
+      ? Checkout.estimatedDocumentCount()
+      : Checkout.countDocuments(filter);
+
     const [orders, total] = await Promise.all([
       Checkout.find(filter)
         .sort({ createdAt: -1 })
         .skip((page - 1) * limit)
         .limit(limit)
-        .select(ORDER_LIST_SELECT)
+        .select(ORDER_TABLE_SELECT)
         .lean(),
-      Checkout.countDocuments(filter),
+      totalPromise,
     ]);
 
     res.json({ orders, total, page, limit });
@@ -851,7 +856,7 @@ router.get("/orders", authMiddleware, requireRole("super_admin", "admin"), async
 // GET /api/admin/orders/:id
 router.get("/orders/:id", authMiddleware, requireRole("super_admin", "admin"), async (req, res) => {
   try {
-    const order = await Checkout.findById(req.params.id).select(ORDER_LIST_SELECT);
+    const order = await Checkout.findById(req.params.id).select(ORDER_DETAIL_SELECT);
     if (!order) return res.status(404).json({ ok: false, error: "not found" });
     res.json(order);
   } catch {
