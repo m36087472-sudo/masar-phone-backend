@@ -1357,6 +1357,13 @@ router.post("/company/footer-file/:key", authMiddleware, uploadDoc.single("file"
     await deleteFromCloudinary(company[key], "raw");
     const result = await uploadToCloudinary(req.file.buffer, "docs", { resource_type: "raw" });
     company[key] = result.secure_url;
+    if (key === "file1") {
+      company.link1Type = "file";
+      company.link1 = "";
+    } else if (key === "file2") {
+      company.link2Type = "file";
+      company.link2 = "";
+    }
     await company.save();
     revalidateCompany().catch(() => {});
     res.json({ url: company[key] });
@@ -1400,6 +1407,8 @@ router.post("/company/footer-items/file/:index", authMiddleware, uploadDoc.singl
     await deleteFromCloudinary(old, "raw");
     const result = await uploadToCloudinary(req.file.buffer, "docs", { resource_type: "raw" });
     company.footerItems[index].file = result.secure_url;
+    company.footerItems[index].linkType = "file";
+    company.footerItems[index].link = "";
     company.markModified("footerItems");
     await company.save();
     revalidateCompany().catch(() => {});
