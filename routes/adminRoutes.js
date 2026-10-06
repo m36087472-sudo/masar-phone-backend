@@ -362,6 +362,22 @@ router.put("/company", authMiddleware, async (req, res) => {
     for (const key of COMPANY_ALLOWED) {
       if (body[key] !== undefined) company[key] = body[key];
     }
+    // Auto-sync: If file exists and link is empty, ensure linkType is "file"
+    if (company.file1 && !company.link1) company.link1Type = "file";
+    if (company.file2 && !company.link2) company.link2Type = "file";
+    if (company.link1Type === "file") company.link1 = "";
+    if (company.link2Type === "file") company.link2 = "";
+
+    if (Array.isArray(company.footerItems)) {
+      company.footerItems = company.footerItems.map((item) => {
+        const itemObj = item.toObject ? item.toObject() : { ...item };
+        if (itemObj.file && !itemObj.link) itemObj.linkType = "file";
+        if (itemObj.linkType === "file") itemObj.link = "";
+        return itemObj;
+      });
+      company.markModified("footerItems");
+    }
+
     await company.save();
     revalidateCompany().catch(() => {});
     res.json(company);
